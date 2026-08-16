@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 
 const LINE_REPLY_URL = "https://api.line.me/v2/bot/message/reply";
+const OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses";
 
 async function readRawBody(req) {
   const chunks = [];
@@ -39,6 +40,137 @@ async function replyMessage(replyToken, text, accessToken) {
   }
 }
 
+function extractOutputText(responseJson) {
+  for (const item of responseJson?.output || []) {
+    if (item?.type !== "message") continue;
+    for (const content of item?.content || []) {
+      if (content?.type === "output_text" && typeof content?.text === "string") {
+        return content.text;
+      }
+    }
+  }
+  return "";
+}
+
+async function parseCommandWithOpenAI(userText, apiKey) {
+  const now = new Date().toISOString();
+  const result = await fetch(OPENAI_RESPONSES_URL, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: process.env.OPENAI_MODEL || "gpt-5-mini",
+      store: false,
+      instructions: [
+        "你是一個排課與簽到系統的自然語言指令解析器。",
+        "目前只能分析，不得執行任何排課、調課、取消、簽到或資料修改。",
+        "將使用者中文指令拆成一個或多個動作。",
+        "允許的 action 只有：search_schedule、create_booking、reschedule_booking、cancel_booking、record_checkin、find_customer、unknown。",
+        "若日期或時間資訊不完整，不要自行補造，填入 unresolved_gaps。",
+        "customer_name 請保留使用者原文中的姓名或稱呼。",
+        `系統目前 UTC 時間：${now}`,
+        "輸出必須符合指定 JSON schema。"
+      ].join("\n"),
+      input: userText,
+      text: {
+        format: {
+          type: "json_schema",
+          name: "booking_command_plan",
+          strict: true,
+          schema: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              summary: { type: "string" },
+              actions: {
+                type: "array",
+                items: {
+                  type: "object",
+                  additionalProperties: false,
+                  properties: {
+                    action: {
+                      type: "string",
+                      enum: [
+                        "search_schedule",
+                        "create_booking",
+                        "reschedule_booking",
+                        "cancel_booking",
+                        "record_checkin",
+                        "find_customer",
+                        "unknown"
+                      ]
+                    },
+                    customer_name: { type: ["string", "null"] },
+                    date_text: { type: ["string", "null"] },
+                    time_text: { type: ["string", "null"] },
+                    new_date_text: { type: ["string", "null"] },
+                    new_time_text: { type: ["string", "null"] },
+                    details: { type: "string" }
+                  },
+                  required: [
+                    "action",
+                    "customer_name",
+                    "date_text",
+                    "time_text",
+                    "new_date_text",
+                    "new_time_text",
+                    "details"
+                  ]
+                }
+              },
+              unresolved_gaps: {
+                type: "array",
+                items: { type: "string" }
+              },
+              requires_confirmation: { type: "boolean" }
+            },
+            required: ["summary", "actions", "unresolved_gaps", "requires_confirmation"]
+          }
+        }
+      }
+    }),
+  });
+
+  if (!result.ok) {
+    const detail = await result.text().catch(() => "");
+    throw new Error(`OpenAI request failed: ${result.status} ${detail}`);
+  }
+
+  const responseJson = await result.json();
+  const outputText = extractOutputText(responseJson);
+  if (!outputText) throw new Error("OpenAI returned no output_text");
+
+  return JSON.parse(outputText);
+}
+
+function formatPlanForLine(plan) {
+  const lines = [];
+  lines.push("🧠 指令解析（尚未執行）");
+  lines.push(plan.summary || "已解析你的指令。\n");
+
+  if (Array.isArray(plan.actions) && plan.actions.length) {
+    plan.actions.forEach((item, index) => {
+      const parts = [`${index + 1}. ${item.action}`];
+      if (item.customer_name) parts.push(`客戶：${item.customer_name}`);
+      if (item.date_text) parts.push(`日期：${item.date_text}`);
+      if (item.time_text) parts.push(`時間：${item.time_text}`);
+      if (item.new_date_text) parts.push(`新日期：${item.new_date_text}`);
+      if (item.new_time_text) parts.push(`新時間：${item.new_time_text}`);
+      if (item.details) parts.push(item.details);
+      lines.push(parts.join("｜"));
+    });
+  }
+
+  if (Array.isArray(plan.unresolved_gaps) && plan.unresolved_gaps.length) {
+    lines.push(`⚠️ 待補資料：${plan.unresolved_gaps.join("、")}`);
+  }
+
+  lines.push("\n目前為 dry-run，不會修改課表或簽到資料。");
+  return lines.join("\n").slice(0, 4900);
+}
+
 export default async function handler(req, res) {
   if (req.method === "GET") {
     return res.status(200).json({
@@ -47,6 +179,8 @@ export default async function handler(req, res) {
       webhook: "/api/line/webhook",
       channelSecretConfigured: Boolean(process.env.LINE_CHANNEL_SECRET),
       accessTokenConfigured: Boolean(process.env.LINE_CHANNEL_ACCESS_TOKEN),
+      openAIConfigured: Boolean(process.env.OPENAI_API_KEY),
+      mode: "dry-run-command-parser",
     });
   }
 
@@ -57,6 +191,8 @@ export default async function handler(req, res) {
 
   const channelSecret = process.env.LINE_CHANNEL_SECRET;
   const accessToken = process.env.LINE_CHANNEL_ACCESS_TOKEN;
+  const openAIKey = process.env.OPENAI_API_KEY;
+
   if (!channelSecret) return res.status(503).send("LINE_CHANNEL_SECRET is not configured");
 
   const rawBody = await readRawBody(req);
@@ -88,8 +224,23 @@ export default async function handler(req, res) {
         continue;
       }
 
+      const originalText = event.message.text;
+      let replyText;
+
+      if (!openAIKey) {
+        replyText = "⚠️ OPENAI_API_KEY 尚未設定。LINE 通道正常，但 AI 解析尚未啟用。";
+      } else {
+        try {
+          const plan = await parseCommandWithOpenAI(originalText, openAIKey);
+          replyText = formatPlanForLine(plan);
+        } catch (error) {
+          console.error(error);
+          replyText = "⚠️ AI 解析失敗，但 LINE Webhook 正常。請稍後再試。";
+        }
+      }
+
       try {
-        await replyMessage(event.replyToken, `收到：${event.message.text}`, accessToken);
+        await replyMessage(event.replyToken, replyText, accessToken);
       } catch (error) {
         console.error(error);
       }

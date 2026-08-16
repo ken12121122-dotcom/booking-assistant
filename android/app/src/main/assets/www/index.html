@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <title>Booking Assistant</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <main class="shell">
+    <section id="setup" class="panel hidden">
+      <p class="eyebrow">首次交機</p>
+      <h1>Booking Assistant</h1>
+      <p class="muted">先完成最小初始化。LINE、AI 與資料庫健康檢查會在下一版接進同一個精靈。</p>
+
+      <label>店家名稱</label>
+      <input id="businessName" placeholder="例如：ABC 教室" />
+
+      <label>管理員 PIN</label>
+      <input id="adminPin" type="password" inputmode="numeric" minlength="4" placeholder="至少 4 碼" />
+
+      <button id="startSetup">開始初始化</button>
+      <p id="setupStatus" class="status"></p>
+    </section>
+
+    <section id="admin" class="panel hidden">
+      <div class="topbar">
+        <div>
+          <p class="eyebrow">本機後台</p>
+          <h1 id="businessTitle">Booking Assistant</h1>
+        </div>
+        <span id="version" class="badge"></span>
+      </div>
+
+      <div class="grid">
+        <article class="card"><strong>今日課表</strong><span>0</span><small>下一步接 Booking Core</small></article>
+        <article class="card"><strong>客戶</strong><span>0</span><small>下一步接本機資料庫</small></article>
+        <article class="card"><strong>簽到</strong><span>0</span><small>下一步接 Check-in</small></article>
+      </div>
+
+      <div class="actions">
+        <button class="secondary" id="resetSetup">重設交機精靈</button>
+      </div>
+    </section>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>

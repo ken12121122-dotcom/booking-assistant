@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 
 const LINE_REPLY_URL = "https://api.line.me/v2/bot/message/reply";
-const OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses";
+const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash-lite";
 
 async function readRawBody(req) {
   const chunks = [];
@@ -15,6 +15,7 @@ function verifyLineSignature(rawBody, signature, channelSecret) {
     .createHmac("sha256", channelSecret)
     .update(rawBody)
     .digest("base64");
+
   const a = Buffer.from(expected);
   const b = Buffer.from(signature);
   return a.length === b.length && crypto.timingSafeEqual(a, b);
@@ -34,128 +35,106 @@ async function replyMessage(replyToken, text, accessToken) {
   });
 
   if (!result.ok) {
-    throw new Error(`LINE_REPLY_${result.status}`);
+    const detail = await result.text().catch(() => "");
+    throw new Error(`LINE reply failed: ${result.status} ${detail}`);
   }
 }
 
-function extractOutputText(responseJson) {
-  for (const item of responseJson?.output || []) {
-    if (item?.type !== "message") continue;
-    for (const content of item?.content || []) {
-      if (content?.type === "output_text" && typeof content?.text === "string") {
-        return content.text;
+const bookingCommandSchema = {
+  type: "object",
+  properties: {
+    summary: { type: "string" },
+    actions: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          action: {
+            type: "string",
+            enum: [
+              "search_schedule",
+              "create_booking",
+              "reschedule_booking",
+              "cancel_booking",
+              "record_checkin",
+              "find_customer",
+              "unknown"
+            ]
+          },
+          customer_name: { type: ["string", "null"] },
+          date_text: { type: ["string", "null"] },
+          time_text: { type: ["string", "null"] },
+          new_date_text: { type: ["string", "null"] },
+          new_time_text: { type: ["string", "null"] },
+          details: { type: "string" }
+        },
+        required: [
+          "action",
+          "customer_name",
+          "date_text",
+          "time_text",
+          "new_date_text",
+          "new_time_text",
+          "details"
+        ]
       }
-    }
-  }
-  return "";
-}
+    },
+    unresolved_gaps: {
+      type: "array",
+      items: { type: "string" }
+    },
+    requires_confirmation: { type: "boolean" }
+  },
+  required: ["summary", "actions", "unresolved_gaps", "requires_confirmation"]
+};
 
-function openAIErrorMessage(status) {
-  if (status === 400) return "OpenAI 回覆 400：目前的請求格式或 Structured Output schema 不被接受。";
-  if (status === 401) return "OpenAI 回覆 401：OPENAI_API_KEY 無效或已失效。";
-  if (status === 403) return "OpenAI 回覆 403：此 API Key / Project 沒有模型或 API 權限。";
-  if (status === 404) return "OpenAI 回覆 404：指定模型不可用或模型名稱不正確。";
-  if (status === 429) return "OpenAI 回覆 429：可能是 API 額度/付款尚未啟用，或目前遇到 rate limit。";
-  return `OpenAI API 回覆 HTTP ${status}。`;
-}
-
-async function parseCommandWithOpenAI(userText, apiKey) {
+async function parseCommandWithGemini(userText, apiKey) {
   const now = new Date().toISOString();
-  const result = await fetch(OPENAI_RESPONSES_URL, {
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(GEMINI_MODEL)}:generateContent`;
+
+  const prompt = [
+    "你是一個排課與簽到系統的自然語言指令解析器。",
+    "目前只能分析，不得執行任何排課、調課、取消、簽到或資料修改。",
+    "將使用者中文指令拆成一個或多個動作。",
+    "允許的 action 只有：search_schedule、create_booking、reschedule_booking、cancel_booking、record_checkin、find_customer、unknown。",
+    "若日期、時間或姓名資訊不完整，不要自行補造，填入 unresolved_gaps。",
+    "customer_name 請保留使用者原文中的姓名或稱呼。",
+    `系統目前 UTC 時間：${now}`,
+    "請解析以下使用者指令：",
+    userText
+  ].join("\n");
+
+  const result = await fetch(endpoint, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
+      "x-goog-api-key": apiKey,
+      "Content-Type": "application/json"
     },
     body: JSON.stringify({
-      model: process.env.OPENAI_MODEL || "gpt-5-mini",
-      store: false,
-      instructions: [
-        "你是一個排課與簽到系統的自然語言指令解析器。",
-        "目前只能分析，不得執行任何排課、調課、取消、簽到或資料修改。",
-        "將使用者中文指令拆成一個或多個動作。",
-        "允許的 action 只有：search_schedule、create_booking、reschedule_booking、cancel_booking、record_checkin、find_customer、unknown。",
-        "若日期或時間資訊不完整，不要自行補造，填入 unresolved_gaps。",
-        "customer_name 請保留使用者原文中的姓名或稱呼。",
-        `系統目前 UTC 時間：${now}`,
-        "輸出必須符合指定 JSON schema。"
-      ].join("\n"),
-      input: userText,
-      text: {
-        format: {
-          type: "json_schema",
-          name: "booking_command_plan",
-          strict: true,
-          schema: {
-            type: "object",
-            additionalProperties: false,
-            properties: {
-              summary: { type: "string" },
-              actions: {
-                type: "array",
-                items: {
-                  type: "object",
-                  additionalProperties: false,
-                  properties: {
-                    action: {
-                      type: "string",
-                      enum: [
-                        "search_schedule",
-                        "create_booking",
-                        "reschedule_booking",
-                        "cancel_booking",
-                        "record_checkin",
-                        "find_customer",
-                        "unknown"
-                      ]
-                    },
-                    customer_name: { type: ["string", "null"] },
-                    date_text: { type: ["string", "null"] },
-                    time_text: { type: ["string", "null"] },
-                    new_date_text: { type: ["string", "null"] },
-                    new_time_text: { type: ["string", "null"] },
-                    details: { type: "string" }
-                  },
-                  required: [
-                    "action",
-                    "customer_name",
-                    "date_text",
-                    "time_text",
-                    "new_date_text",
-                    "new_time_text",
-                    "details"
-                  ]
-                }
-              },
-              unresolved_gaps: {
-                type: "array",
-                items: { type: "string" }
-              },
-              requires_confirmation: { type: "boolean" }
-            },
-            required: ["summary", "actions", "unresolved_gaps", "requires_confirmation"]
-          }
-        }
+      contents: [{ parts: [{ text: prompt }] }],
+      generationConfig: {
+        responseMimeType: "application/json",
+        responseSchema: bookingCommandSchema,
+        temperature: 0.1
       }
-    }),
+    })
   });
 
   if (!result.ok) {
-    const err = new Error(openAIErrorMessage(result.status));
-    err.status = result.status;
-    throw err;
+    const detail = await result.text().catch(() => "");
+    throw new Error(`Gemini request failed: ${result.status} ${detail}`);
   }
 
   const responseJson = await result.json();
-  const outputText = extractOutputText(responseJson);
-  if (!outputText) throw new Error("OpenAI 成功回應，但沒有 output_text。")
-  return JSON.parse(outputText);
+  const text = responseJson?.candidates?.[0]?.content?.parts?.map((p) => p?.text || "").join("") || "";
+  if (!text) throw new Error("Gemini returned no text output");
+  return JSON.parse(text);
 }
 
 function formatPlanForLine(plan) {
   const lines = [];
   lines.push("🧠 指令解析（尚未執行）");
-  lines.push(plan.summary || "已解析你的指令。")
+  lines.push(plan.summary || "已解析你的指令。");
 
   if (Array.isArray(plan.actions) && plan.actions.length) {
     plan.actions.forEach((item, index) => {
@@ -178,6 +157,18 @@ function formatPlanForLine(plan) {
   return lines.join("\n").slice(0, 4900);
 }
 
+function describeGeminiError(error) {
+  const message = String(error?.message || error || "未知錯誤");
+  const statusMatch = message.match(/Gemini request failed:\s*(\d{3})/);
+  const status = statusMatch?.[1];
+
+  if (status === "400") return "Gemini 回覆 400：請求格式或模型設定有問題。";
+  if (status === "401" || status === "403") return "Gemini 回覆權限錯誤：請確認 GEMINI_API_KEY 是否有效且可使用 Gemini API。";
+  if (status === "404") return `Gemini 回覆 404：模型 ${GEMINI_MODEL} 可能不可用。`;
+  if (status === "429") return "Gemini 回覆 429：已達免費額度或速率限制，稍後再試。";
+  return `Gemini 解析錯誤：${message.slice(0, 300)}`;
+}
+
 export default async function handler(req, res) {
   if (req.method === "GET") {
     return res.status(200).json({
@@ -186,9 +177,9 @@ export default async function handler(req, res) {
       webhook: "/api/line/webhook",
       channelSecretConfigured: Boolean(process.env.LINE_CHANNEL_SECRET),
       accessTokenConfigured: Boolean(process.env.LINE_CHANNEL_ACCESS_TOKEN),
-      openAIConfigured: Boolean(process.env.OPENAI_API_KEY),
-      model: process.env.OPENAI_MODEL || "gpt-5-mini",
-      mode: "dry-run-command-parser",
+      geminiConfigured: Boolean(process.env.GEMINI_API_KEY),
+      model: GEMINI_MODEL,
+      mode: "dry-run-command-parser"
     });
   }
 
@@ -199,12 +190,13 @@ export default async function handler(req, res) {
 
   const channelSecret = process.env.LINE_CHANNEL_SECRET;
   const accessToken = process.env.LINE_CHANNEL_ACCESS_TOKEN;
-  const openAIKey = process.env.OPENAI_API_KEY;
+  const geminiKey = process.env.GEMINI_API_KEY;
 
   if (!channelSecret) return res.status(503).send("LINE_CHANNEL_SECRET is not configured");
 
   const rawBody = await readRawBody(req);
   const signature = req.headers["x-line-signature"] || "";
+
   if (!verifyLineSignature(rawBody, signature, channelSecret)) {
     return res.status(401).send("Invalid signature");
   }
@@ -221,28 +213,35 @@ export default async function handler(req, res) {
   }
 
   for (const event of payload.events) {
-    if (event?.type === "message" && event?.message?.type === "text" && event?.replyToken) {
-      if (!accessToken) continue;
+    if (
+      event?.type === "message" &&
+      event?.message?.type === "text" &&
+      event?.replyToken
+    ) {
+      if (!accessToken) {
+        console.warn("LINE_CHANNEL_ACCESS_TOKEN is not configured; message received but not replied.");
+        continue;
+      }
 
       const originalText = event.message.text;
       let replyText;
 
-      if (!openAIKey) {
-        replyText = "⚠️ OPENAI_API_KEY 尚未設定。LINE 通道正常，但 AI 解析尚未啟用。";
+      if (!geminiKey) {
+        replyText = "⚠️ GEMINI_API_KEY 尚未設定。LINE 通道正常，但 AI 解析尚未啟用。";
       } else {
         try {
-          const plan = await parseCommandWithOpenAI(originalText, openAIKey);
+          const plan = await parseCommandWithGemini(originalText, geminiKey);
           replyText = formatPlanForLine(plan);
         } catch (error) {
-          console.error("AI_PARSE_ERROR", error?.status || "unknown", error?.message || "unknown");
-          replyText = `⚠️ AI 解析失敗。\n${error?.message || "未知錯誤"}\nLINE Webhook 本身正常。`;
+          console.error(error);
+          replyText = `⚠️ AI 解析失敗。\n${describeGeminiError(error)}\nLINE Webhook 本身正常。`;
         }
       }
 
       try {
         await replyMessage(event.replyToken, replyText, accessToken);
       } catch (error) {
-        console.error("LINE_REPLY_ERROR", error?.message || "unknown");
+        console.error(error);
       }
     }
   }

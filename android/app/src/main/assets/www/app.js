@@ -44,6 +44,15 @@ function fmt(value) {
   return new Date(value).toLocaleString('zh-TW', { hour12: false });
 }
 
+function parseNative(value) {
+  try { return JSON.parse(value); } catch (_) { return { ok: false, error: 'invalid_response', raw: value }; }
+}
+
+function setLineBadge(text, mode = 'neutral') {
+  $('lineBadge').textContent = text;
+  $('lineBadge').className = `statusBadge ${mode}`;
+}
+
 function renderCounts() {
   $('customerCount').textContent = state.customers.length;
   $('todayClassCount').textContent = state.classes.filter(x => isToday(x.time)).length;
@@ -79,11 +88,28 @@ function renderCheckins() {
   }).join('') : '<div class="empty">尚無簽到紀錄</div>';
 }
 
+function renderLineConfig() {
+  const cfg = parseNative(window.BookingNative.getLineConfig());
+  $('lineSecretHint').textContent = cfg.secretSet ? '已加密儲存；留空可清除' : '尚未儲存';
+  $('lineTokenHint').textContent = cfg.tokenSet ? '已加密儲存；重新貼上可更新' : '尚未儲存';
+  $('lineWebhook').value = cfg.webhook || '';
+  if (cfg.botName || cfg.basicId) {
+    $('lineBotInfo').innerHTML = `<strong>${esc(cfg.botName || 'LINE Bot')}</strong><small>${esc(cfg.basicId || '')}</small>`;
+    setLineBadge('已驗證', 'ok');
+    $('tokenHealth').textContent = '✅ 已驗證';
+  } else if (cfg.tokenSet) {
+    setLineBadge('已儲存', 'warn');
+  } else {
+    setLineBadge('未設定', 'neutral');
+  }
+}
+
 function renderAll() {
   renderCounts();
   renderCustomers();
   renderClasses();
   renderCheckins();
+  renderLineConfig();
 }
 
 function boot() {
@@ -170,11 +196,88 @@ $('classList').addEventListener('click', (e) => {
 
 document.querySelectorAll('.tab').forEach(btn => btn.addEventListener('click', () => {
   document.querySelectorAll('.tab').forEach(x => x.classList.toggle('active', x === btn));
-  ['customers','classes','checkins'].forEach(id => $(id).classList.toggle('hidden', id !== btn.dataset.tab));
+  ['customers','classes','checkins','line'].forEach(id => $(id).classList.toggle('hidden', id !== btn.dataset.tab));
+  if (btn.dataset.tab === 'line') renderLineConfig();
 }));
 
+$('saveLine').addEventListener('click', () => {
+  const secret = $('lineSecret').value.trim();
+  const token = $('lineToken').value.trim();
+  const webhook = $('lineWebhook').value.trim();
+  $('lineStatus').textContent = '正在儲存…';
+  setTimeout(() => {
+    const result = parseNative(window.BookingNative.saveLineConfig(secret, token, webhook));
+    if (result.ok) {
+      $('lineStatus').textContent = '✅ LINE 設定已儲存。Secret / Token 已交由 Android Keystore 保護。';
+      $('lineSecret').value = '';
+      $('lineToken').value = '';
+      renderLineConfig();
+    } else if (result.error === 'https_required') {
+      $('lineStatus').textContent = 'Webhook 必須使用 https://';
+    } else {
+      $('lineStatus').textContent = '請至少輸入 Channel Access Token。';
+    }
+  }, 30);
+});
+
+$('testLine').addEventListener('click', () => {
+  $('lineStatus').textContent = '正在向 LINE 驗證 Token…';
+  $('tokenHealth').textContent = '測試中…';
+  setTimeout(() => {
+    const result = parseNative(window.BookingNative.testLineToken());
+    if (result.ok) {
+      const body = result.body || {};
+      $('tokenHealth').textContent = '✅ 正常';
+      $('lineBotInfo').innerHTML = `<strong>${esc(body.displayName || 'LINE Bot')}</strong><small>${esc(body.basicId || body.userId || '')}</small>`;
+      $('lineStatus').textContent = `✅ LINE Token 驗證成功（HTTP ${result.status}）。`;
+      setLineBadge('已連線', 'ok');
+    } else {
+      $('tokenHealth').textContent = `❌ ${result.status || result.error || '失敗'}`;
+      $('lineStatus').textContent = `LINE Token 驗證失敗：${result.status || result.error || 'unknown'}`;
+      setLineBadge('驗證失敗', 'bad');
+    }
+  }, 30);
+});
+
+$('setWebhook').addEventListener('click', () => {
+  const webhook = $('lineWebhook').value.trim();
+  const cfg = parseNative(window.BookingNative.getLineConfig());
+  if (webhook && webhook !== cfg.webhook) {
+    $('lineStatus').textContent = 'Webhook 有變更，請先按「儲存 LINE 設定」。';
+    return;
+  }
+  $('lineStatus').textContent = '正在設定 LINE Webhook…';
+  $('webhookHealth').textContent = '設定中…';
+  setTimeout(() => {
+    const result = parseNative(window.BookingNative.configureLineWebhook());
+    if (result.ok) {
+      $('webhookHealth').textContent = '✅ 已設定';
+      $('lineStatus').textContent = '✅ Webhook URL 已送至 LINE。設定可能需要短暫時間生效。';
+    } else {
+      $('webhookHealth').textContent = `❌ ${result.status || result.error || '失敗'}`;
+      $('lineStatus').textContent = `Webhook 設定失敗：${result.status || result.error || 'unknown'}`;
+    }
+  }, 30);
+});
+
+$('testWebhook').addEventListener('click', () => {
+  $('lineStatus').textContent = '正在要求 LINE 測試 Webhook…';
+  $('webhookHealth').textContent = '測試中…';
+  setTimeout(() => {
+    const result = parseNative(window.BookingNative.testLineWebhook());
+    const body = result.body || {};
+    if (result.ok && body.success !== false) {
+      $('webhookHealth').textContent = '✅ 可達';
+      $('lineStatus').textContent = '✅ LINE 已成功連到這個 Webhook。';
+    } else {
+      $('webhookHealth').textContent = `❌ ${body.statusCode || result.status || result.error || '失敗'}`;
+      $('lineStatus').textContent = `Webhook 測試失敗：${body.reason || body.detail || result.status || result.error || 'unknown'}`;
+    }
+  }, 30);
+});
+
 $('resetSetup').addEventListener('click', () => {
-  if (confirm('要清除目前的交機設定嗎？本機客戶、課程與簽到資料不會一起刪除。')) {
+  if (confirm('要清除目前的交機設定嗎？本機客戶、課程、簽到與 LINE 設定不會一起刪除。')) {
     window.BookingNative.resetSetup();
     location.reload();
   }

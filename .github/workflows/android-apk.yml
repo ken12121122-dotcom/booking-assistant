@@ -8,6 +8,9 @@ on:
       - '.github/workflows/android-apk.yml'
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -24,6 +27,13 @@ jobs:
       - name: Install Android SDK
         run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
 
+      - name: Install stable test signing key
+        shell: bash
+        run: |
+          mkdir -p "$HOME/.android"
+          echo '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' | base64 -d > "$HOME/.android/debug.keystore"
+          chmod 600 "$HOME/.android/debug.keystore"
+
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.5.0'
@@ -32,7 +42,20 @@ jobs:
         working-directory: android
         run: gradle assembleDebug
 
+      - name: Prepare update asset
+        run: cp android/app/build/outputs/apk/debug/app-debug.apk BookingAssistant-latest.apk
+
       - uses: actions/upload-artifact@v4
         with:
           name: booking-assistant-debug-apk
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          path: BookingAssistant-latest.apk
+
+      - name: Publish latest update APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view android-latest >/dev/null 2>&1; then
+            gh release upload android-latest BookingAssistant-latest.apk --clobber
+          else
+            gh release create android-latest BookingAssistant-latest.apk --target "$GITHUB_SHA" --title "Booking Assistant Android Latest" --notes "Rolling test release for in-app updates."
+          fi

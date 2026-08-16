@@ -24,7 +24,9 @@ import androidx.webkit.WebViewClientCompat
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
+import java.net.URLEncoder
 import java.security.KeyStore
+import java.util.UUID
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
@@ -61,7 +63,6 @@ class MainActivity : Activity() {
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(downloadReceiver, IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE), RECEIVER_NOT_EXPORTED)
         } else {
@@ -71,18 +72,13 @@ class MainActivity : Activity() {
 
         webView = WebView(this)
         setContentView(webView)
-
         val assetLoader = WebViewAssetLoader.Builder()
             .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(this))
             .build()
-
         webView.webViewClient = object : WebViewClientCompat() {
-            override fun shouldInterceptRequest(
-                view: WebView,
-                request: WebResourceRequest
-            ): WebResourceResponse? = assetLoader.shouldInterceptRequest(request.url)
+            override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? =
+                assetLoader.shouldInterceptRequest(request.url)
         }
-
         webView.settings.javaScriptEnabled = true
         webView.settings.domStorageEnabled = true
         webView.settings.allowFileAccess = false
@@ -102,13 +98,9 @@ class MainActivity : Activity() {
         val keyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
         val existing = keyStore.getKey(KEY_ALIAS, null) as? SecretKey
         if (existing != null) return existing
-
         val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
         generator.init(
-            KeyGenParameterSpec.Builder(
-                KEY_ALIAS,
-                KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT
-            )
+            KeyGenParameterSpec.Builder(KEY_ALIAS, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
                 .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
                 .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
                 .build()
@@ -139,21 +131,18 @@ class MainActivity : Activity() {
             val cipher = Cipher.getInstance("AES/GCM/NoPadding")
             cipher.init(Cipher.DECRYPT_MODE, getOrCreateSecretKey(), GCMParameterSpec(128, iv))
             String(cipher.doFinal(data), Charsets.UTF_8)
-        } catch (_: Exception) {
-            ""
-        }
+        } catch (_: Exception) { "" }
     }
 
-    private fun lineRequest(method: String, path: String, token: String, body: String? = null): JSONObject {
+    private fun requestJson(url: String, method: String = "GET", bearer: String = "", body: String? = null): JSONObject {
         val result = JSONObject()
-        if (token.isBlank()) return result.put("ok", false).put("error", "missing_token")
         return try {
-            val conn = (URL("https://api.line.me$path").openConnection() as HttpURLConnection).apply {
+            val conn = (URL(url).openConnection() as HttpURLConnection).apply {
                 requestMethod = method
                 connectTimeout = 10000
                 readTimeout = 10000
-                setRequestProperty("Authorization", "Bearer $token")
                 setRequestProperty("Content-Type", "application/json")
+                if (bearer.isNotBlank()) setRequestProperty("Authorization", "Bearer $bearer")
                 if (body != null) doOutput = true
             }
             if (body != null) conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
@@ -171,24 +160,30 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun lineRequest(method: String, path: String, token: String, body: String? = null): JSONObject {
+        if (token.isBlank()) return JSONObject().put("ok", false).put("error", "missing_token")
+        return requestJson("https://api.line.me$path", method, token, body)
+    }
+
+    private fun deviceId(): String {
+        val existing = prefs.getString("device_id", "") ?: ""
+        if (existing.isNotBlank()) return existing
+        val created = "BA-" + UUID.randomUUID().toString().replace("-", "").take(12).uppercase()
+        prefs.edit().putString("device_id", created).apply()
+        return created
+    }
+
     inner class AppBridge {
-        @JavascriptInterface
-        fun isInitialized(): Boolean = prefs.getBoolean("initialized", false)
-
-        @JavascriptInterface
-        fun getBusinessName(): String = prefs.getString("business_name", "") ?: ""
-
-        @JavascriptInterface
-        fun getVersion(): String = BuildConfig.VERSION_NAME
+        @JavascriptInterface fun isInitialized(): Boolean = prefs.getBoolean("initialized", false)
+        @JavascriptInterface fun getBusinessName(): String = prefs.getString("business_name", "") ?: ""
+        @JavascriptInterface fun getVersion(): String = BuildConfig.VERSION_NAME
+        @JavascriptInterface fun getDeviceId(): String = deviceId()
 
         @JavascriptInterface
         fun saveSetup(businessName: String, adminPin: String): Boolean {
             if (businessName.isBlank() || adminPin.length < 4) return false
-            prefs.edit()
-                .putString("business_name", businessName.trim())
-                .putString("admin_pin", adminPin)
-                .putBoolean("initialized", true)
-                .apply()
+            prefs.edit().putString("business_name", businessName.trim()).putString("admin_pin", adminPin)
+                .putBoolean("initialized", true).apply()
             return true
         }
 
@@ -199,24 +194,25 @@ class MainActivity : Activity() {
         }
 
         @JavascriptInterface
-        fun getLineConfig(): String {
-            return JSONObject()
-                .put("secretSet", readEncrypted("line_secret").isNotBlank())
-                .put("tokenSet", readEncrypted("line_token").isNotBlank())
-                .put("webhook", prefs.getString("line_webhook", "") ?: "")
-                .put("botName", prefs.getString("line_bot_name", "") ?: "")
-                .put("basicId", prefs.getString("line_basic_id", "") ?: "")
-                .toString()
-        }
+        fun getLineConfig(): String = JSONObject()
+            .put("secretSet", readEncrypted("line_secret").isNotBlank())
+            .put("tokenSet", readEncrypted("line_token").isNotBlank())
+            .put("webhook", prefs.getString("line_webhook", "") ?: "")
+            .put("botName", prefs.getString("line_bot_name", "") ?: "")
+            .put("basicId", prefs.getString("line_basic_id", "") ?: "")
+            .put("deviceId", deviceId())
+            .toString()
 
         @JavascriptInterface
         fun saveLineConfig(secret: String, token: String, webhook: String): String {
-            if (token.isBlank()) return JSONObject().put("ok", false).put("error", "token_required").toString()
+            if (token.isBlank() && readEncrypted("line_token").isBlank()) {
+                return JSONObject().put("ok", false).put("error", "token_required").toString()
+            }
             if (webhook.isNotBlank() && !webhook.startsWith("https://")) {
                 return JSONObject().put("ok", false).put("error", "https_required").toString()
             }
-            saveEncrypted("line_secret", secret.trim())
-            saveEncrypted("line_token", token.trim())
+            if (secret.isNotBlank()) saveEncrypted("line_secret", secret.trim())
+            if (token.isNotBlank()) saveEncrypted("line_token", token.trim())
             prefs.edit().putString("line_webhook", webhook.trim()).apply()
             return JSONObject().put("ok", true).toString()
         }
@@ -226,10 +222,8 @@ class MainActivity : Activity() {
             val result = lineRequest("GET", "/v2/bot/info", readEncrypted("line_token"))
             if (result.optBoolean("ok")) {
                 val body = result.optJSONObject("body")
-                prefs.edit()
-                    .putString("line_bot_name", body?.optString("displayName", "") ?: "")
-                    .putString("line_basic_id", body?.optString("basicId", "") ?: "")
-                    .apply()
+                prefs.edit().putString("line_bot_name", body?.optString("displayName", "") ?: "")
+                    .putString("line_basic_id", body?.optString("basicId", "") ?: "").apply()
             }
             return result.toString()
         }
@@ -237,16 +231,8 @@ class MainActivity : Activity() {
         @JavascriptInterface
         fun configureLineWebhook(): String {
             val endpoint = prefs.getString("line_webhook", "") ?: ""
-            if (!endpoint.startsWith("https://")) {
-                return JSONObject().put("ok", false).put("error", "https_required").toString()
-            }
-            val body = JSONObject().put("endpoint", endpoint).toString()
-            return lineRequest("PUT", "/v2/bot/channel/webhook/endpoint", readEncrypted("line_token"), body).toString()
-        }
-
-        @JavascriptInterface
-        fun getLineWebhookInfo(): String {
-            return lineRequest("GET", "/v2/bot/channel/webhook/endpoint", readEncrypted("line_token")).toString()
+            if (!endpoint.startsWith("https://")) return JSONObject().put("ok", false).put("error", "https_required").toString()
+            return lineRequest("PUT", "/v2/bot/channel/webhook/endpoint", readEncrypted("line_token"), JSONObject().put("endpoint", endpoint).toString()).toString()
         }
 
         @JavascriptInterface
@@ -257,15 +243,22 @@ class MainActivity : Activity() {
         }
 
         @JavascriptInterface
+        fun pollLineGateway(): String {
+            val endpoint = prefs.getString("line_webhook", "") ?: ""
+            val secret = readEncrypted("line_secret")
+            if (!endpoint.startsWith("https://")) return JSONObject().put("ok", false).put("error", "webhook_required").toString()
+            if (secret.isBlank()) return JSONObject().put("ok", false).put("error", "secret_required").toString()
+            val separator = if (endpoint.contains("?")) "&" else "?"
+            val url = endpoint + separator + "mode=poll&device_id=" + URLEncoder.encode(deviceId(), "UTF-8")
+            return requestJson(url, "GET", secret).toString()
+        }
+
+        @JavascriptInterface
         fun startUpdate(): String {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !packageManager.canRequestPackageInstalls()) {
-                val settingsIntent = Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES).apply {
-                    data = Uri.parse("package:$packageName")
-                }
-                startActivity(settingsIntent)
+                startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES).apply { data = Uri.parse("package:$packageName") })
                 return "permission_required"
             }
-
             return try {
                 val request = DownloadManager.Request(Uri.parse(UPDATE_URL))
                     .setTitle("Booking Assistant 更新")
@@ -273,15 +266,10 @@ class MainActivity : Activity() {
                     .setMimeType("application/vnd.android.package-archive")
                     .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
                     .setDestinationInExternalFilesDir(this@MainActivity, null, "BookingAssistant-latest.apk")
-                    .setAllowedOverMetered(true)
-                    .setAllowedOverRoaming(false)
-
-                val manager = getSystemService(DOWNLOAD_SERVICE) as DownloadManager
-                updateDownloadId = manager.enqueue(request)
+                    .setAllowedOverMetered(true).setAllowedOverRoaming(false)
+                updateDownloadId = (getSystemService(DOWNLOAD_SERVICE) as DownloadManager).enqueue(request)
                 "downloading"
-            } catch (e: Exception) {
-                "error:${e.javaClass.simpleName}"
-            }
+            } catch (e: Exception) { "error:${e.javaClass.simpleName}" }
         }
     }
 }

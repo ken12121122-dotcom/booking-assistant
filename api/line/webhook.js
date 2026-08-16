@@ -42,12 +42,14 @@ async function replyMessage(replyToken, text, accessToken) {
 
 const bookingCommandSchema = {
   type: "object",
+  additionalProperties: false,
   properties: {
     summary: { type: "string" },
     actions: {
       type: "array",
       items: {
         type: "object",
+        additionalProperties: false,
         properties: {
           action: {
             type: "string",
@@ -114,7 +116,7 @@ async function parseCommandWithGemini(userText, apiKey) {
       contents: [{ parts: [{ text: prompt }] }],
       generationConfig: {
         responseMimeType: "application/json",
-        responseSchema: bookingCommandSchema,
+        responseJsonSchema: bookingCommandSchema,
         temperature: 0.1
       }
     })
@@ -162,11 +164,11 @@ function describeGeminiError(error) {
   const statusMatch = message.match(/Gemini request failed:\s*(\d{3})/);
   const status = statusMatch?.[1];
 
-  if (status === "400") return "Gemini 回覆 400：請求格式或模型設定有問題。";
+  if (status === "400") return `Gemini 回覆 400：${message.slice(0, 500)}`;
   if (status === "401" || status === "403") return "Gemini 回覆權限錯誤：請確認 GEMINI_API_KEY 是否有效且可使用 Gemini API。";
   if (status === "404") return `Gemini 回覆 404：模型 ${GEMINI_MODEL} 可能不可用。`;
   if (status === "429") return "Gemini 回覆 429：已達免費額度或速率限制，稍後再試。";
-  return `Gemini 解析錯誤：${message.slice(0, 300)}`;
+  return `Gemini 解析錯誤：${message.slice(0, 500)}`;
 }
 
 export default async function handler(req, res) {

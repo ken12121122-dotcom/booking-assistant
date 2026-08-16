@@ -12,31 +12,22 @@
       <p class="eyebrow">首次交機</p>
       <h1>Booking Assistant</h1>
       <p class="muted">先建立店家資料。完成後可進入本機後台，再由「LINE」頁完成機器人連線。</p>
-
       <label>店家名稱</label>
       <input id="businessName" placeholder="例如：ABC 教室" />
-
       <label>管理員 PIN</label>
       <input id="adminPin" type="password" inputmode="numeric" minlength="4" placeholder="至少 4 碼" />
-
       <button id="startSetup">開始初始化</button>
       <p id="setupStatus" class="status"></p>
     </section>
 
     <section id="admin" class="panel hidden">
       <div class="topbar">
-        <div>
-          <p class="eyebrow">本機後台</p>
-          <h1 id="businessTitle">Booking Assistant</h1>
-        </div>
+        <div><p class="eyebrow">本機後台</p><h1 id="businessTitle">Booking Assistant</h1></div>
         <span id="version" class="badge"></span>
       </div>
 
       <div class="updateBar">
-        <div>
-          <strong>系統更新</strong>
-          <small id="updateStatus">可直接由 App 下載最新 APK。</small>
-        </div>
+        <div><strong>系統更新</strong><small id="updateStatus">可直接由 App 下載最新 APK。</small></div>
         <button id="updateApp" class="compact">更新</button>
       </div>
 
@@ -55,47 +46,30 @@
 
       <section id="customers" class="workspace">
         <h2>客戶管理</h2>
-        <div class="formRow">
-          <input id="customerName" placeholder="姓名" />
-          <input id="customerPhone" placeholder="電話" inputmode="tel" />
-          <button id="addCustomer">新增客戶</button>
-        </div>
+        <div class="formRow"><input id="customerName" placeholder="姓名" /><input id="customerPhone" placeholder="電話" inputmode="tel" /><button id="addCustomer">新增客戶</button></div>
         <div id="customerList" class="list"></div>
       </section>
 
       <section id="classes" class="workspace hidden">
         <h2>課表管理</h2>
-        <div class="formRow">
-          <input id="className" placeholder="課程名稱" />
-          <input id="classTime" type="datetime-local" />
-          <button id="addClass">新增課程</button>
-        </div>
+        <div class="formRow"><input id="className" placeholder="課程名稱" /><input id="classTime" type="datetime-local" /><button id="addClass">新增課程</button></div>
         <div id="classList" class="list"></div>
       </section>
 
       <section id="checkins" class="workspace hidden">
         <h2>快速簽到</h2>
         <p class="muted">選擇客戶後立即記錄目前時間。</p>
-        <div class="formRow two">
-          <select id="checkinCustomer"></select>
-          <button id="addCheckin">立即簽到</button>
-        </div>
+        <div class="formRow two"><select id="checkinCustomer"></select><button id="addCheckin">立即簽到</button></div>
         <div id="checkinList" class="list"></div>
       </section>
 
       <section id="line" class="workspace hidden">
         <div class="sectionTitle">
-          <div>
-            <h2>LINE 連線</h2>
-            <p class="muted">在 App 內儲存與驗證 Messaging API 設定。Secret / Token 會以 Android Keystore 加密後保存。</p>
-          </div>
+          <div><h2>LINE 連線</h2><p class="muted">v0.4 可把 LINE 文字訊息同步顯示到 APK。Secret / Token 仍由 Android Keystore 保護。</p></div>
           <span id="lineBadge" class="statusBadge neutral">未設定</span>
         </div>
 
-        <div class="lineInfo" id="lineBotInfo">
-          <strong>Bot</strong>
-          <small>尚未驗證</small>
-        </div>
+        <div class="lineInfo" id="lineBotInfo"><strong>Bot</strong><small>尚未驗證</small></div>
 
         <label>Channel Secret</label>
         <input id="lineSecret" type="password" autocomplete="off" placeholder="貼上 Channel Secret" />
@@ -118,14 +92,23 @@
         <div class="healthBox">
           <div><span>Token</span><strong id="tokenHealth">尚未測試</strong></div>
           <div><span>Webhook</span><strong id="webhookHealth">尚未測試</strong></div>
-          <div><span>接收 LINE 訊息</span><strong id="messageHealth">等待 v0.4 Gateway 配對</strong></div>
+          <div><span>裝置 ID</span><strong id="deviceId">—</strong></div>
+          <div><span>接收 LINE 訊息</span><strong id="messageHealth">尚未啟動</strong></div>
         </div>
+
+        <div class="gatewayBox">
+          <div><strong>LINE → APK 測試收件匣</strong><small>先按「開始接收」，再從 LINE 傳一段文字給 Bot。</small></div>
+          <div class="buttonGrid">
+            <button id="startGateway">開始接收</button>
+            <button id="pollGateway" class="secondary">立即同步</button>
+          </div>
+          <div id="lineInbox" class="list"></div>
+        </div>
+        <p class="hint">v0.4 使用實驗性短暫 Relay；Vercel Function 冷啟動時可能遺失尚未取走的訊息。正式版會改成持久佇列。</p>
         <p id="lineStatus" class="status"></p>
       </section>
 
-      <div class="actions">
-        <button class="secondary" id="resetSetup">重設交機精靈</button>
-      </div>
+      <div class="actions"><button class="secondary" id="resetSetup">重設交機精靈</button></div>
     </section>
   </main>
   <script src="app.js"></script>

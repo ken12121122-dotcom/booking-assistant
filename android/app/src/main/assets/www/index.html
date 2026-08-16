@@ -11,7 +11,7 @@
     <section id="setup" class="panel hidden">
       <p class="eyebrow">首次交機</p>
       <h1>Booking Assistant</h1>
-      <p class="muted">先建立店家資料。完成後即可使用本機客戶、課程與簽到功能。</p>
+      <p class="muted">先建立店家資料。完成後可進入本機後台，再由「LINE」頁完成機器人連線。</p>
 
       <label>店家名稱</label>
       <input id="businessName" placeholder="例如：ABC 教室" />
@@ -50,6 +50,7 @@
         <button data-tab="customers" class="tab active">客戶</button>
         <button data-tab="classes" class="tab">課表</button>
         <button data-tab="checkins" class="tab">簽到</button>
+        <button data-tab="line" class="tab">LINE</button>
       </nav>
 
       <section id="customers" class="workspace">
@@ -80,6 +81,46 @@
           <button id="addCheckin">立即簽到</button>
         </div>
         <div id="checkinList" class="list"></div>
+      </section>
+
+      <section id="line" class="workspace hidden">
+        <div class="sectionTitle">
+          <div>
+            <h2>LINE 連線</h2>
+            <p class="muted">在 App 內儲存與驗證 Messaging API 設定。Secret / Token 會以 Android Keystore 加密後保存。</p>
+          </div>
+          <span id="lineBadge" class="statusBadge neutral">未設定</span>
+        </div>
+
+        <div class="lineInfo" id="lineBotInfo">
+          <strong>Bot</strong>
+          <small>尚未驗證</small>
+        </div>
+
+        <label>Channel Secret</label>
+        <input id="lineSecret" type="password" autocomplete="off" placeholder="貼上 Channel Secret" />
+        <small id="lineSecretHint" class="hint">尚未儲存</small>
+
+        <label>Channel Access Token</label>
+        <textarea id="lineToken" rows="4" autocomplete="off" placeholder="貼上 Channel Access Token"></textarea>
+        <small id="lineTokenHint" class="hint">尚未儲存</small>
+
+        <label>Webhook URL</label>
+        <input id="lineWebhook" type="url" inputmode="url" placeholder="https://你的網域/api/line/webhook" />
+
+        <div class="buttonGrid">
+          <button id="saveLine">儲存 LINE 設定</button>
+          <button id="testLine" class="secondary">驗證 Token</button>
+          <button id="setWebhook" class="secondary">設定 Webhook</button>
+          <button id="testWebhook" class="secondary">測試 Webhook</button>
+        </div>
+
+        <div class="healthBox">
+          <div><span>Token</span><strong id="tokenHealth">尚未測試</strong></div>
+          <div><span>Webhook</span><strong id="webhookHealth">尚未測試</strong></div>
+          <div><span>接收 LINE 訊息</span><strong id="messageHealth">等待 v0.4 Gateway 配對</strong></div>
+        </div>
+        <p id="lineStatus" class="status"></p>
       </section>
 
       <div class="actions">

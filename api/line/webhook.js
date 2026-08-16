@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { isSessionStoreConfigured, loadConversation, saveConversation, clearConversation } from "../../lib/session.js";
 
 const LINE_REPLY_URL = "https://api.line.me/v2/bot/message/reply";
 const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash-lite";
@@ -85,26 +86,45 @@ const bookingCommandSchema = {
       type: "array",
       items: { type: "string" }
     },
-    requires_confirmation: { type: "boolean" }
+    requires_confirmation: { type: "boolean" },
+    needs_clarification: { type: "boolean" },
+    clarifying_question: { type: ["string", "null"] }
   },
-  required: ["summary", "actions", "unresolved_gaps", "requires_confirmation"]
+  required: [
+    "summary",
+    "actions",
+    "unresolved_gaps",
+    "requires_confirmation",
+    "needs_clarification",
+    "clarifying_question"
+  ]
 };
 
-async function parseCommandWithGemini(userText, apiKey) {
+const SYSTEM_INSTRUCTION = [
+  "你是一個排課與簽到系統的自然語言指令解析器。",
+  "目前只能分析，不得執行任何排課、調課、取消、簽到或資料修改。",
+  "將使用者中文指令拆成一個或多個動作。",
+  "允許的 action 只有：search_schedule、create_booking、reschedule_booking、cancel_booking、record_checkin、find_customer、unknown。",
+  "customer_name 請保留使用者原文中的姓名或稱呼。",
+  "",
+  "這是一段多輪對話。如果你在前面已經反問過問題，而使用者這則新訊息是在回答，請結合完整對話歷史補完資訊，不要重複問已經回答過的問題。",
+  "若日期、時間、姓名等關鍵資訊仍不足以確定要執行的動作：",
+  "- needs_clarification 設為 true",
+  "- clarifying_question 用一句簡短口語化的中文，一次只問「一件」最關鍵缺少的資訊，不要一次問一堆",
+  "- actions 可以留空或只放已經確定的部分，unresolved_gaps 列出仍缺的項目",
+  "若資訊已經足夠執行：",
+  "- needs_clarification 設為 false，clarifying_question 為 null",
+  "- 正常輸出完整的 actions"
+].join("\n");
+
+async function parseCommandWithGemini(history, userText, apiKey) {
   const now = new Date().toISOString();
   const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(GEMINI_MODEL)}:generateContent`;
 
-  const prompt = [
-    "你是一個排課與簽到系統的自然語言指令解析器。",
-    "目前只能分析，不得執行任何排課、調課、取消、簽到或資料修改。",
-    "將使用者中文指令拆成一個或多個動作。",
-    "允許的 action 只有：search_schedule、create_booking、reschedule_booking、cancel_booking、record_checkin、find_customer、unknown。",
-    "若日期、時間或姓名資訊不完整，不要自行補造，填入 unresolved_gaps。",
-    "customer_name 請保留使用者原文中的姓名或稱呼。",
-    `系統目前 UTC 時間：${now}`,
-    "請解析以下使用者指令：",
-    userText
-  ].join("\n");
+  const contents = [
+    ...history,
+    { role: "user", parts: [{ text: `系統目前 UTC 時間：${now}\n使用者訊息：${userText}` }] }
+  ];
 
   const result = await fetch(endpoint, {
     method: "POST",
@@ -113,7 +133,8 @@ async function parseCommandWithGemini(userText, apiKey) {
       "Content-Type": "application/json"
     },
     body: JSON.stringify({
-      contents: [{ parts: [{ text: prompt }] }],
+      systemInstruction: { parts: [{ text: SYSTEM_INSTRUCTION }] },
+      contents,
       generationConfig: {
         responseMimeType: "application/json",
         responseJsonSchema: bookingCommandSchema,
@@ -130,7 +151,7 @@ async function parseCommandWithGemini(userText, apiKey) {
   const responseJson = await result.json();
   const text = responseJson?.candidates?.[0]?.content?.parts?.map((p) => p?.text || "").join("") || "";
   if (!text) throw new Error("Gemini returned no text output");
-  return JSON.parse(text);
+  return { plan: JSON.parse(text), rawText: text, userText };
 }
 
 function formatPlanForLine(plan) {
@@ -159,6 +180,17 @@ function formatPlanForLine(plan) {
   return lines.join("\n").slice(0, 4900);
 }
 
+function formatClarifyingQuestion(plan) {
+  const lines = [];
+  lines.push(`🤔 ${plan.clarifying_question || "可以再說明一下嗎？"}`);
+
+  if (Array.isArray(plan.unresolved_gaps) && plan.unresolved_gaps.length) {
+    lines.push(`（缺：${plan.unresolved_gaps.join("、")}）`);
+  }
+
+  return lines.join("\n").slice(0, 4900);
+}
+
 function describeGeminiError(error) {
   const message = String(error?.message || error || "未知錯誤");
   const statusMatch = message.match(/Gemini request failed:\s*(\d{3})/);
@@ -181,6 +213,7 @@ export default async function handler(req, res) {
       accessTokenConfigured: Boolean(process.env.LINE_CHANNEL_ACCESS_TOKEN),
       geminiConfigured: Boolean(process.env.GEMINI_API_KEY),
       model: GEMINI_MODEL,
+      sessionStoreConfigured: isSessionStoreConfigured(),
       mode: "dry-run-command-parser"
     });
   }
@@ -226,14 +259,42 @@ export default async function handler(req, res) {
       }
 
       const originalText = event.message.text;
+      const userId = event.source?.userId;
       let replyText;
 
       if (!geminiKey) {
         replyText = "⚠️ GEMINI_API_KEY 尚未設定。LINE 通道正常，但 AI 解析尚未啟用。";
       } else {
+        let history = [];
         try {
-          const plan = await parseCommandWithGemini(originalText, geminiKey);
-          replyText = formatPlanForLine(plan);
+          history = await loadConversation(userId);
+        } catch (error) {
+          console.error("loadConversation failed", error);
+        }
+
+        try {
+          const { plan, rawText } = await parseCommandWithGemini(history, originalText, geminiKey);
+
+          if (plan.needs_clarification) {
+            replyText = formatClarifyingQuestion(plan);
+            const nextHistory = [
+              ...history,
+              { role: "user", parts: [{ text: originalText }] },
+              { role: "model", parts: [{ text: rawText }] }
+            ];
+            try {
+              await saveConversation(userId, nextHistory);
+            } catch (error) {
+              console.error("saveConversation failed", error);
+            }
+          } else {
+            replyText = formatPlanForLine(plan);
+            try {
+              await clearConversation(userId);
+            } catch (error) {
+              console.error("clearConversation failed", error);
+            }
+          }
         } catch (error) {
           console.error(error);
           replyText = `⚠️ AI 解析失敗。\n${describeGeminiError(error)}\nLINE Webhook 本身正常。`;

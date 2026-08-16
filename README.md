@@ -8,9 +8,10 @@
 - `POST /api/line/webhook`：接收 LINE webhook
 - 驗證 `x-line-signature`
 - 支援 LINE Verify 的空 `events` 請求
-- 收到文字訊息後回覆：`收到：原訊息`
+- 收到文字訊息後，用 Gemini 解析成排課指令（dry-run，尚未真正執行）
+- 資訊不足時會反問使用者一句話；設定 Vercel KV 後可記住上一輪反問，讓使用者接著回答也能被理解（多輪對話）；未設定 KV 時退化為單輪解析
 
-目前尚未接 GPT、排課、日曆、簽到或資料庫。
+目前尚未接排課、日曆、簽到執行或資料庫。
 
 ## Vercel 環境變數
 
@@ -18,6 +19,9 @@
 
 - `LINE_CHANNEL_SECRET`
 - `LINE_CHANNEL_ACCESS_TOKEN`
+- `GEMINI_API_KEY`
+- `GEMINI_MODEL`（選填，預設 `gemini-2.5-flash-lite`）
+- `KV_REST_API_URL` / `KV_REST_API_TOKEN`（選填，接 Vercel KV 後才會有多輪反問記憶）
 
 不要把 Secret 或 Token commit 到 GitHub。
 

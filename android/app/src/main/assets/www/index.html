@@ -11,7 +11,7 @@
     <section id="setup" class="panel hidden">
       <p class="eyebrow">首次交機</p>
       <h1>Booking Assistant</h1>
-      <p class="muted">先完成最小初始化。LINE、AI 與資料庫健康檢查會在下一版接進同一個精靈。</p>
+      <p class="muted">先建立店家資料。完成後即可使用本機客戶、課程與簽到功能。</p>
 
       <label>店家名稱</label>
       <input id="businessName" placeholder="例如：ABC 教室" />
@@ -32,11 +32,55 @@
         <span id="version" class="badge"></span>
       </div>
 
-      <div class="grid">
-        <article class="card"><strong>今日課表</strong><span>0</span><small>下一步接 Booking Core</small></article>
-        <article class="card"><strong>客戶</strong><span>0</span><small>下一步接本機資料庫</small></article>
-        <article class="card"><strong>簽到</strong><span>0</span><small>下一步接 Check-in</small></article>
+      <div class="updateBar">
+        <div>
+          <strong>系統更新</strong>
+          <small id="updateStatus">可直接由 App 下載最新 APK。</small>
+        </div>
+        <button id="updateApp" class="compact">更新</button>
       </div>
+
+      <div class="grid">
+        <article class="card"><strong>今日課表</strong><span id="todayClassCount">0</span><small>依今日日期計算</small></article>
+        <article class="card"><strong>客戶</strong><span id="customerCount">0</span><small>本機名單</small></article>
+        <article class="card"><strong>簽到</strong><span id="checkinCount">0</span><small>今日簽到</small></article>
+      </div>
+
+      <nav class="tabs">
+        <button data-tab="customers" class="tab active">客戶</button>
+        <button data-tab="classes" class="tab">課表</button>
+        <button data-tab="checkins" class="tab">簽到</button>
+      </nav>
+
+      <section id="customers" class="workspace">
+        <h2>客戶管理</h2>
+        <div class="formRow">
+          <input id="customerName" placeholder="姓名" />
+          <input id="customerPhone" placeholder="電話" inputmode="tel" />
+          <button id="addCustomer">新增客戶</button>
+        </div>
+        <div id="customerList" class="list"></div>
+      </section>
+
+      <section id="classes" class="workspace hidden">
+        <h2>課表管理</h2>
+        <div class="formRow">
+          <input id="className" placeholder="課程名稱" />
+          <input id="classTime" type="datetime-local" />
+          <button id="addClass">新增課程</button>
+        </div>
+        <div id="classList" class="list"></div>
+      </section>
+
+      <section id="checkins" class="workspace hidden">
+        <h2>快速簽到</h2>
+        <p class="muted">選擇客戶後立即記錄目前時間。</p>
+        <div class="formRow two">
+          <select id="checkinCustomer"></select>
+          <button id="addCheckin">立即簽到</button>
+        </div>
+        <div id="checkinList" class="list"></div>
+      </section>
 
       <div class="actions">
         <button class="secondary" id="resetSetup">重設交機精靈</button>

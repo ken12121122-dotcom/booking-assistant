@@ -15,7 +15,6 @@ function verifyLineSignature(rawBody, signature, channelSecret) {
     .createHmac("sha256", channelSecret)
     .update(rawBody)
     .digest("base64");
-
   const a = Buffer.from(expected);
   const b = Buffer.from(signature);
   return a.length === b.length && crypto.timingSafeEqual(a, b);
@@ -35,8 +34,7 @@ async function replyMessage(replyToken, text, accessToken) {
   });
 
   if (!result.ok) {
-    const detail = await result.text().catch(() => "");
-    throw new Error(`LINE reply failed: ${result.status} ${detail}`);
+    throw new Error(`LINE_REPLY_${result.status}`);
   }
 }
 
@@ -50,6 +48,15 @@ function extractOutputText(responseJson) {
     }
   }
   return "";
+}
+
+function openAIErrorMessage(status) {
+  if (status === 400) return "OpenAI 回覆 400：目前的請求格式或 Structured Output schema 不被接受。";
+  if (status === 401) return "OpenAI 回覆 401：OPENAI_API_KEY 無效或已失效。";
+  if (status === 403) return "OpenAI 回覆 403：此 API Key / Project 沒有模型或 API 權限。";
+  if (status === 404) return "OpenAI 回覆 404：指定模型不可用或模型名稱不正確。";
+  if (status === 429) return "OpenAI 回覆 429：可能是 API 額度/付款尚未啟用，或目前遇到 rate limit。";
+  return `OpenAI API 回覆 HTTP ${status}。`;
 }
 
 async function parseCommandWithOpenAI(userText, apiKey) {
@@ -134,21 +141,21 @@ async function parseCommandWithOpenAI(userText, apiKey) {
   });
 
   if (!result.ok) {
-    const detail = await result.text().catch(() => "");
-    throw new Error(`OpenAI request failed: ${result.status} ${detail}`);
+    const err = new Error(openAIErrorMessage(result.status));
+    err.status = result.status;
+    throw err;
   }
 
   const responseJson = await result.json();
   const outputText = extractOutputText(responseJson);
-  if (!outputText) throw new Error("OpenAI returned no output_text");
-
+  if (!outputText) throw new Error("OpenAI 成功回應，但沒有 output_text。")
   return JSON.parse(outputText);
 }
 
 function formatPlanForLine(plan) {
   const lines = [];
   lines.push("🧠 指令解析（尚未執行）");
-  lines.push(plan.summary || "已解析你的指令。\n");
+  lines.push(plan.summary || "已解析你的指令。")
 
   if (Array.isArray(plan.actions) && plan.actions.length) {
     plan.actions.forEach((item, index) => {
@@ -180,6 +187,7 @@ export default async function handler(req, res) {
       channelSecretConfigured: Boolean(process.env.LINE_CHANNEL_SECRET),
       accessTokenConfigured: Boolean(process.env.LINE_CHANNEL_ACCESS_TOKEN),
       openAIConfigured: Boolean(process.env.OPENAI_API_KEY),
+      model: process.env.OPENAI_MODEL || "gpt-5-mini",
       mode: "dry-run-command-parser",
     });
   }
@@ -197,7 +205,6 @@ export default async function handler(req, res) {
 
   const rawBody = await readRawBody(req);
   const signature = req.headers["x-line-signature"] || "";
-
   if (!verifyLineSignature(rawBody, signature, channelSecret)) {
     return res.status(401).send("Invalid signature");
   }
@@ -214,15 +221,8 @@ export default async function handler(req, res) {
   }
 
   for (const event of payload.events) {
-    if (
-      event?.type === "message" &&
-      event?.message?.type === "text" &&
-      event?.replyToken
-    ) {
-      if (!accessToken) {
-        console.warn("LINE_CHANNEL_ACCESS_TOKEN is not configured; message received but not replied.");
-        continue;
-      }
+    if (event?.type === "message" && event?.message?.type === "text" && event?.replyToken) {
+      if (!accessToken) continue;
 
       const originalText = event.message.text;
       let replyText;
@@ -234,15 +234,15 @@ export default async function handler(req, res) {
           const plan = await parseCommandWithOpenAI(originalText, openAIKey);
           replyText = formatPlanForLine(plan);
         } catch (error) {
-          console.error(error);
-          replyText = "⚠️ AI 解析失敗，但 LINE Webhook 正常。請稍後再試。";
+          console.error("AI_PARSE_ERROR", error?.status || "unknown", error?.message || "unknown");
+          replyText = `⚠️ AI 解析失敗。\n${error?.message || "未知錯誤"}\nLINE Webhook 本身正常。`;
         }
       }
 
       try {
         await replyMessage(event.replyToken, replyText, accessToken);
       } catch (error) {
-        console.error(error);
+        console.error("LINE_REPLY_ERROR", error?.message || "unknown");
       }
     }
   }
